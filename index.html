@@ -13,12 +13,19 @@ button.blue{background:#1565c0}button.grey{background:#777}
 .row small{color:#777;display:block}.new{color:#c62828;font-size:12px}
 .del{background:none;color:#c62828;width:auto;margin:0;padding:4px 8px;font-size:18px}
 #info{font-size:14px;color:#555}
+.ac{position:relative}
+#vorschlagBox{position:absolute;left:0;right:0;top:100%;z-index:10;background:#fff;border:1px solid #ccc;border-radius:8px;margin-top:2px;box-shadow:0 4px 12px #0003;max-height:240px;overflow-y:auto;display:none}
+#vorschlagBox div{padding:12px 10px;font-size:17px;border-bottom:1px solid #eee;cursor:pointer}
+#vorschlagBox div:last-child{border-bottom:0}
+#vorschlagBox div.aktiv,#vorschlagBox div:active{background:#e3f2fd}
+#vorschlagBox small{color:#777;font-size:13px;margin-left:6px}
 </style></head><body>
 <header>Marcels Haushaltsbuch</header>
 <div class="card">
 <label>Datum</label><input type="date" id="datum">
-<label>Beschreibung</label><input id="beschr" placeholder="z. B. LIDL" list="vorschlaege">
-<datalist id="vorschlaege"></datalist>
+<label>Beschreibung</label>
+<div class="ac"><input id="beschr" placeholder="z. B. LIDL" autocomplete="off" autocapitalize="sentences">
+<div id="vorschlagBox"></div></div>
 <label>Kategorie</label><select id="kat"></select>
 <label>Monat (automatisch, änderbar)</label><select id="monat"></select>
 <label>Betrag in €</label><input id="betrag" inputmode="decimal" placeholder="0,00">
@@ -45,6 +52,53 @@ $("datum").value=heute();monatSetzen();
 $("datum").addEventListener("change",monatSetzen);
 $("kat").value=localStorage.getItem("hb_letzteKat")||"Lebensmittel & Haushalt";
 function sichern(){localStorage.setItem("hb_daten",JSON.stringify(daten));}
+function esc(t){return String(t).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));}
+// --- Beschreibungs-Vorschläge: eigener Speicher, bleibt auch nach dem Löschen von Buchungen erhalten ---
+let vorschl=JSON.parse(localStorage.getItem("hb_beschreibungen")||"{}"); // {schluessel:{text,anzahl,zuletzt,kat}}
+function vorschlMerken(text,kat,zeit){
+ const k=text.toLowerCase();const alt=vorschl[k];
+ if(alt&&alt.zuletzt>zeit){alt.anzahl++;return;}
+ vorschl[k]={text,anzahl:(alt?alt.anzahl:0)+1,zuletzt:zeit,kat};
+}
+// Einmalig vorhandene Buchungen übernehmen
+if(!localStorage.getItem("hb_beschreibungen")){
+ daten.forEach(d=>{if(d.beschr)vorschlMerken(d.beschr,d.kat,d.datum||"");});
+ localStorage.setItem("hb_beschreibungen",JSON.stringify(vorschl));
+}
+let treffer=[],aktiv=-1;
+function vorschlZeigen(){
+ const q=$("beschr").value.trim().toLowerCase();const box=$("vorschlagBox");
+ if(!q){box.style.display="none";treffer=[];return;}
+ const alle=Object.values(vorschl).filter(v=>v.text.toLowerCase()!==q);
+ const sort=(a,b)=>b.anzahl-a.anzahl||b.zuletzt.localeCompare(a.zuletzt);
+ const anfang=alle.filter(v=>v.text.toLowerCase().startsWith(q)).sort(sort);
+ const mitte=alle.filter(v=>!v.text.toLowerCase().startsWith(q)&&v.text.toLowerCase().includes(q)).sort(sort);
+ treffer=anfang.concat(mitte).slice(0,8);aktiv=-1;
+ if(!treffer.length){box.style.display="none";return;}
+ box.innerHTML=treffer.map((v,i)=>`<div data-i="${i}">${esc(v.text)}${v.kat?`<small>${esc(v.kat)}</small>`:""}</div>`).join("");
+ box.style.display="block";
+}
+function vorschlWaehlen(i){
+ const v=treffer[i];if(!v)return;
+ $("beschr").value=v.text;
+ if(v.kat&&KAT.includes(v.kat))$("kat").value=v.kat;
+ $("vorschlagBox").style.display="none";treffer=[];
+ $("betrag").focus();
+}
+$("beschr").addEventListener("input",vorschlZeigen);
+$("beschr").addEventListener("focus",vorschlZeigen);
+$("beschr").addEventListener("blur",()=>setTimeout(()=>{if(document.activeElement!==$("beschr"))$("vorschlagBox").style.display="none";},150));
+$("vorschlagBox").addEventListener("mousedown",e=>e.preventDefault());
+$("vorschlagBox").addEventListener("click",e=>{const el=e.target.closest("[data-i]");if(el)vorschlWaehlen(+el.dataset.i);});
+$("beschr").addEventListener("keydown",e=>{
+ if(!treffer.length)return;
+ const els=$("vorschlagBox").children;
+ if(e.key==="ArrowDown"||e.key==="ArrowUp"){
+  e.preventDefault();aktiv=(aktiv+(e.key==="ArrowDown"?1:-1)+treffer.length)%treffer.length;
+  [...els].forEach((el,i)=>el.classList.toggle("aktiv",i===aktiv));els[aktiv].scrollIntoView({block:"nearest"});
+ }else if(e.key==="Enter"&&aktiv>=0){e.preventDefault();vorschlWaehlen(aktiv);}
+ else if(e.key==="Escape"){$("vorschlagBox").style.display="none";treffer=[];}
+});
 function euro(x){return x.toLocaleString("de-DE",{minimumFractionDigits:2,maximumFractionDigits:2})+" €";}
 function datumDE(s){return s.slice(8,10)+"."+s.slice(5,7)+"."+s.slice(0,4);}
 function speichern(){
@@ -54,6 +108,7 @@ function speichern(){
  daten.push({id:Date.now().toString(36)+Math.random().toString(36).slice(2,6),datum:$("datum").value,
   beschr:$("beschr").value.trim(),kat:$("kat").value,monat:$("monat").value,betrag:b,exportiert:false});
  localStorage.setItem("hb_letzteKat",$("kat").value);
+ if($("beschr").value.trim()){vorschlMerken($("beschr").value.trim(),$("kat").value,new Date().toISOString());localStorage.setItem("hb_beschreibungen",JSON.stringify(vorschl));}
  sichern();$("betrag").value="";$("beschr").value="";anzeigen();
 }
 function loeschen(id){if(confirm("Buchung löschen?")){daten=daten.filter(d=>d.id!==id);sichern();anzeigen();}}
@@ -61,9 +116,7 @@ function anzeigen(){
  const neu=daten.filter(d=>!d.exportiert).length;
  $("info").textContent=neu+" neue Buchung(en) noch nicht exportiert, insgesamt "+daten.length+" gespeichert.";
  const s=[...daten].sort((a,b)=>b.datum.localeCompare(a.datum)).slice(0,30);
- $("liste").innerHTML=s.map(d=>`<div class="row"><div>${d.beschr||"(ohne Beschreibung)"} ${d.exportiert?"":'<span class="new">neu</span>'}<small>${datumDE(d.datum)} · ${d.kat}</small></div><div>${euro(d.betrag)}<button class="del" onclick="loeschen('${d.id}')">✕</button></div></div>`).join("")||"<p>Noch keine Buchungen.</p>";
- const namen=[...new Set(daten.map(d=>d.beschr).filter(x=>x))];
- $("vorschlaege").innerHTML=namen.map(n=>`<option value="${n}">`).join("");
+ $("liste").innerHTML=s.map(d=>`<div class="row"><div>${d.beschr?esc(d.beschr):"(ohne Beschreibung)"} ${d.exportiert?"":'<span class="new">neu</span>'}<small>${datumDE(d.datum)} · ${d.kat}</small></div><div>${euro(d.betrag)}<button class="del" onclick="loeschen('${d.id}')">✕</button></div></div>`).join("")||"<p>Noch keine Buchungen.</p>";
 }
 async function dateiTeilen(liste){
  if(!liste.length){alert("Keine Buchungen zum Exportieren.");return false;}
